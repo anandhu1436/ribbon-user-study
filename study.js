@@ -1,4 +1,4 @@
-import { patterns, deformations, makePattern, randomGenerator } from './geometry.js';
+import { patterns, deformations, makePattern, randomGenerator, adapt, adaptLegacy, model } from './geometry.js';
 
 export function createTrials(seed) {
   const random = randomGenerator(seed);
@@ -12,7 +12,7 @@ export function createTrials(seed) {
   };
   const assignments = shuffled(Array.from({ length: 16 }, (_, index) => index < 8));
   const comparisons = shuffled(patterns.flatMap((pattern, patternIndex) => deformations.map(condition => ({
-    id: `preference-${pattern.id}-${condition.id}`, stage: 'preference', pattern: pattern.id, condition: condition.id, seed: 2087 + patternIndex * 101
+    id: `preference-${pattern.id}-${condition.id}`, stage: 'preference', pattern: pattern.id, condition: condition.id, seed: 2087 + patternIndex * 101, adaptationVersion: 'local-spacing-phase/1'
   })))).map((trial, index) => ({ ...trial, mapping: assignments[index] ? { A: 'direct', B: 'adapted' } : { A: 'adapted', B: 'direct' } }));
   const conditions = shuffled(deformations);
   const drawings = shuffled(patterns.map((pattern, index) => ({
@@ -31,6 +31,13 @@ export function trialSource(trial) {
 export function preferenceResult(trial, choice) {
   if (!['A', 'B', 'tie'].includes(choice)) throw new Error('Select A, B, or no preference.');
   return { chosenLabel: choice, chosenMethod: choice === 'tie' ? null : trial.mapping[choice], mapping: { ...trial.mapping } };
+}
+
+export function trialCandidates(trial) {
+  const source = trialSource(trial);
+  const algorithm = trial.adaptationVersion === 'local-spacing-phase/1' ? adapt : adaptLegacy;
+  const result = algorithm(source, model(trial.condition, .85), model());
+  return { direct: source, adapted: result.strokes };
 }
 
 export function restoreState(saved, fallback) {

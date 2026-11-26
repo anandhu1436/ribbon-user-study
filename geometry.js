@@ -122,7 +122,7 @@ function interpolateStroke(left, right, blend, identifier) {
     return first.map((coordinate, axis) => coordinate * (1 - blend) + second[axis] * blend);
   }) };
 }
-export function adapt(strokes, geometry, reference) {
+export function adaptLegacy(strokes, geometry, reference) {
   const families = new Map();
   for (const stroke of strokes) {
     if (!families.has(stroke.family)) families.set(stroke.family, []);
@@ -158,10 +158,91 @@ export function adapt(strokes, geometry, reference) {
   }
   return { strokes: output, added, removed };
 }
+function sampleStroke(stroke, fraction) {
+  const location = fraction * (stroke.points.length - 1);
+  const index = Math.min(stroke.points.length - 2, Math.floor(location));
+  const blend = location - index;
+  return stroke.points[index].map((coordinate, axis) => coordinate * (1 - blend) + stroke.points[index + 1][axis] * blend);
+}
+function localGap(left, right, fraction, geometry) {
+  const first = project(sampleStroke(left, fraction), geometry);
+  const second = project(sampleStroke(right, fraction), geometry);
+  const before = project(sampleStroke(left, Math.max(0, fraction - .01)), geometry);
+  const after = project(sampleStroke(left, Math.min(1, fraction + .01)), geometry);
+  const tangent = [after[0] - before[0], after[1] - before[1]];
+  return Math.abs((second[0] - first[0]) * tangent[1] - (second[1] - first[1]) * tangent[0]) / Math.max(.001, Math.hypot(...tangent));
+}
+export function adapt(strokes, geometry, reference) {
+  const families = new Map();
+  for (const stroke of strokes) {
+    const key = stroke.family ?? stroke.id;
+    if (!families.has(key)) families.set(key, []);
+    families.get(key).push(stroke);
+  }
+  const output = [];
+  let adjusted = false;
+  let maximumSpacingChange = 0;
+  for (const family of families.values()) {
+    family.sort((left, right) => left.rank - right.rank);
+    if (family.length < 2) { output.push(...family); continue; }
+    const sampleCount = 81;
+    let ratios = Array.from({ length: sampleCount }, (_, step) => family.slice(1).map((right, index) => {
+      const fraction = step / (sampleCount - 1);
+      const restGap = localGap(family[index], right, fraction, reference);
+      return restGap > .05 ? Math.max(.2, Math.min(3, localGap(family[index], right, fraction, geometry) / restGap)) : 1;
+    }));
+    const longitudinal = family.every(stroke => {
+      const first = stroke.points[0], last = stroke.points[stroke.points.length - 1];
+      return Math.abs(last[0] - first[0]) * reference.length > 2 * Math.abs(last[1] - first[1]) * 32;
+    });
+    if (!longitudinal) {
+      const interior = ratios.slice(8, -8);
+      const averages = ratios[0].map((value, index) => interior.reduce((sum, section) => sum + section[index], 0) / interior.length);
+      ratios = ratios.map(() => averages);
+    }
+    const change = Math.max(...ratios.flat().map(ratio => Math.abs(ratio - 1)));
+    maximumSpacingChange = Math.max(maximumSpacingChange, change);
+    if (change <= .08) { output.push(...family); continue; }
+    adjusted = true;
+    const sections = ratios.map((values, step) => {
+      const phases = [0];
+      values.forEach((value, index) => {
+        const nearby = ratios.slice(Math.max(0, step - 2), Math.min(sampleCount, step + 3));
+        const ratio = nearby.reduce((sum, section) => sum + section[index], 0) / nearby.length;
+        const correction = Math.sign(ratio - 1) * Math.max(0, Math.abs(ratio - 1) - .05);
+        phases.push(phases[phases.length - 1] + 1 + correction);
+      });
+      const offset = (family.length - 1 - phases[phases.length - 1]) / 2;
+      return phases.map(phase => phase + offset);
+    });
+    const firstLevel = Math.ceil(Math.min(...sections.map(section => section[0])));
+    const lastLevel = Math.floor(Math.max(...sections.map(section => section[section.length - 1])));
+    for (let level = firstLevel; level <= lastLevel; level++) {
+      let points = [];
+      let startStep = 0;
+      let fragment = 0;
+      const finish = endStep => {
+        if (points.length >= 3) output.push({ ...family[Math.max(0, Math.min(family.length - 1, level))], id: `phase-${family[0].id}-${level}-${fragment++}`, rank: level, generated: true, points, taperStart: startStep > 0, taperEnd: endStep < sampleCount - 1 });
+        points = [];
+      };
+      sections.forEach((phases, step) => {
+        if (level < phases[0] || level > phases[phases.length - 1]) { finish(step - 1); return; }
+        const index = Math.max(1, phases.findIndex(phase => phase >= level));
+        const blend = (level - phases[index - 1]) / (phases[index] - phases[index - 1]);
+        const left = sampleStroke(family[index - 1], step / (sampleCount - 1));
+        const right = sampleStroke(family[index], step / (sampleCount - 1));
+        if (!points.length) startStep = step;
+        points.push(left.map((coordinate, axis) => coordinate * (1 - blend) + right[axis] * blend));
+      });
+      finish(sampleCount - 1);
+    }
+  }
+  return { strokes: output, added: Math.max(0, output.length - strokes.length), removed: Math.max(0, strokes.length - output.length), adjusted, maximumSpacingChange, method: 'local-spacing-phase/1' };
+}
 export function pathData(points, closed = false) {
   return points.map((point, index) => `${index ? 'L' : 'M'}${point[0].toFixed(2)},${point[1].toFixed(2)}`).join(' ') + (closed ? ' Z' : '');
 }
-export function ribbonPolygon(points, width) {
+export function ribbonPolygon(points, width, taper = {}) {
   if (points.length < 2) return [];
   const left = [], right = [];
   points.forEach((point, index) => {
@@ -169,7 +250,8 @@ export function ribbonPolygon(points, width) {
     const after = points[Math.min(points.length - 1, index + 1)];
     const tangent = [after[0] - before[0], after[1] - before[1]];
     const norm = Math.max(.001, Math.hypot(...tangent));
-    const half = width * .5 * (index === 0 || index === points.length - 1 ? .72 : 1);
+    const fade = Math.min(taper.taperStart ? index / 3 : 1, taper.taperEnd ? (points.length - 1 - index) / 3 : 1, 1);
+    const half = width * .5 * (index === 0 || index === points.length - 1 ? .72 : 1) * fade;
     left.push([point[0] - tangent[1] / norm * half, point[1] + tangent[0] / norm * half]);
     right.push([point[0] + tangent[1] / norm * half, point[1] - tangent[0] / norm * half]);
   });
@@ -182,7 +264,7 @@ export function svgDrawing(geometry, strokes, id, ghost = []) {
   let markup = `<defs><clipPath id="${id}-clip"><path d="${boundary}"/></clipPath></defs><path d="${boundary}" fill="#f8fafc" stroke="#687c8a" stroke-width="1.6"/>`;
   const strip = (stroke, isGhost) => {
     const points = stroke.points.map(point => screen(point, geometry, viewport));
-    return `<path d="${pathData(ribbonPolygon(points, stroke.width), true)}" fill="${isGhost ? '#a8b6c1' : '#e65443'}" stroke="${isGhost ? 'none' : '#b33b32'}" stroke-width=".55" ${isGhost ? 'opacity=".42"' : ''}/>`;
+    return `<path d="${pathData(ribbonPolygon(points, stroke.width, stroke), true)}" fill="${isGhost ? '#a8b6c1' : '#e65443'}" stroke="${isGhost ? 'none' : '#b33b32'}" stroke-width=".55" ${isGhost ? 'opacity=".42"' : ''}/>`;
   };
   markup += `<g clip-path="url(#${id}-clip)">${ghost.map(stroke => strip(stroke, true)).join('')}${strokes.map(stroke => strip(stroke, false)).join('')}</g>`;
   for (const station of [0, 1]) {

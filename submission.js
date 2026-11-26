@@ -9,7 +9,7 @@ export function submissionEndpoint(value) {
 export function sessionPayload(session) {
   if (!session.finishedAt && !session.endedEarlyAt) throw new Error('Only ended sessions can be submitted.');
   const { id, protocolVersion, participant, seed, trialOrder, startedAt, finishedAt, endedEarlyAt, responses, unfinishedDraft, remoteConsent } = session;
-  return { schema: 'adaptive-ribbon-submission/1', generatorVersion: '1.1.0', session: { id, protocolVersion, participant, seed, trialOrder, startedAt, finishedAt, endedEarlyAt, responses, unfinishedDraft, remoteConsent } };
+  return { schema: 'adaptive-ribbon-submission/1', generatorVersion: session.generatorVersion || '1.1.0', session: { id, protocolVersion, participant, seed, trialOrder, startedAt, finishedAt, endedEarlyAt, responses, unfinishedDraft, remoteConsent } };
 }
 
 export async function sendSession(session, endpoint, request = fetch) {

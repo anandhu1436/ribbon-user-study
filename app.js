@@ -1,5 +1,5 @@
 import { patterns, deformations, model, makePattern, adapt, screen, invert, svgDrawing } from './geometry.js';
-import { createTrials, trialSource, preferenceResult, restoreState } from './study.js';
+import { createTrials, trialSource, trialCandidates, preferenceResult, restoreState } from './study.js';
 import { studyConfig } from './config.js';
 import { submissionEndpoint, sendSession } from './submission.js';
 
@@ -89,7 +89,7 @@ function context() {
     const source = trialSource(trial);
     const reference = model('rest');
     const target = model(trial.condition, .85);
-    return { source, reference, target, targetStrokes: state.active.draft.strokes, trial, candidates: { direct: source, adapted: adapt(source, target, reference).strokes } };
+    return { source, reference, target, targetStrokes: state.active.draft.strokes, trial, candidates: trialCandidates(trial) };
   }
   const lab = state.lab;
   const source = lab.custom || makePattern(lab.pattern, 2087, lab.width);
@@ -236,7 +236,7 @@ $('#start-study').onclick = () => {
   const participant = $('#participant').value.trim() || `P-${seed.toString(36).slice(0, 6)}`;
   const identifier = `session-${Date.now()}-${seed}`;
   state.active = { id: identifier, participant, seed, trials, index: 0, draft: draft(), finished: false };
-  state.sessions.push({ id: identifier, protocolVersion: 2, participant, seed, trialOrder: clone(trials), startedAt: new Date().toISOString(), responses: [], ...(endpoint ? { remoteConsent: { endpoint, acceptedAt: new Date().toISOString(), noticeVersion: 1 } } : {}) });
+  state.sessions.push({ id: identifier, protocolVersion: 2, generatorVersion: '1.2.0', participant, seed, trialOrder: clone(trials), startedAt: new Date().toISOString(), responses: [], ...(endpoint ? { remoteConsent: { endpoint, acceptedAt: new Date().toISOString(), noticeVersion: 1 } } : {}) });
   undoStack = []; redoStack = []; tool = 'draw'; persist(); render(); notify('Stage 1: compare A and B, then save your preference.');
 };
 $('#save-next').onclick = () => {
@@ -343,7 +343,7 @@ function download(contents, mime, filename) {
 }
 $('#export-json').onclick = () => {
   finishGesture();
-  download(JSON.stringify({ schema: 'adaptive-ribbon-study/2', exportedAt: new Date().toISOString(), description: 'Pilot: 16 blinded randomized A/B preferences followed by 4 simplified drawings. chosenMethod records direct/adapted; null means no preference. Legacy sessions may contain only drawings. Coordinates are material [s,u], s in [0,1], u in [-1,1]. Width is in 500x440 SVG viewBox units. elapsedWallMs includes idle time; drawingMs measures pointer gestures. Drawing may be primed by the preceding comparison stage.', generatorVersion: '1.1.0', adaptationThresholds: { compression: .74, stretch: 1.25 }, sessionData: state.sessions, activeDraft: state.active, lab: state.lab }, null, 2), 'application/json', `ribbon-responses-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  download(JSON.stringify({ schema: 'adaptive-ribbon-study/2', exportedAt: new Date().toISOString(), description: 'Pilot: 16 blinded randomized A/B preferences followed by 4 simplified drawings. chosenMethod records direct/adapted; null means no preference. Each trial records adaptationVersion; missing means legacy whole-ribbon budgets. Existing sessions retain their original stimuli. Coordinates are material [s,u], s in [0,1], u in [-1,1]. Width is in 500x440 SVG viewBox units. elapsedWallMs includes idle time; drawingMs measures pointer gestures. Drawing may be primed by the preceding comparison stage.', generatorVersion: '1.2.0', adaptationSettings: { method: 'local-spacing-phase/1', activation: .08, deadband: .05, samples: 81 }, sessionData: state.sessions, activeDraft: state.active, lab: state.lab }, null, 2), 'application/json', `ribbon-responses-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
 };
 $('#export-svg').onclick = () => {
   finishGesture(); const scene = context();
