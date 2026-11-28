@@ -173,6 +173,15 @@ function localGap(left, right, fraction, geometry) {
   return Math.abs((second[0] - first[0]) * tangent[1] - (second[1] - first[1]) * tangent[0]) / Math.max(.001, Math.hypot(...tangent));
 }
 export function adapt(strokes, geometry, reference) {
+  return adaptSpacing(strokes, geometry, reference, true);
+}
+export function adaptPhaseV1(strokes, geometry, reference) {
+  return adaptSpacing(strokes, geometry, reference, false);
+}
+function adaptSpacing(strokes, geometry, reference, localBending) {
+  const bending = localBending && geometry.kind === 'bend';
+  const activation = bending ? .01 : .08;
+  const deadband = bending ? .005 : .05;
   const families = new Map();
   for (const stroke of strokes) {
     const key = stroke.family ?? stroke.id;
@@ -195,21 +204,42 @@ export function adapt(strokes, geometry, reference) {
       const first = stroke.points[0], last = stroke.points[stroke.points.length - 1];
       return Math.abs(last[0] - first[0]) * reference.length > 2 * Math.abs(last[1] - first[1]) * 32;
     });
-    if (!longitudinal) {
+    if (!longitudinal && !bending) {
       const interior = ratios.slice(8, -8);
       const averages = ratios[0].map((value, index) => interior.reduce((sum, section) => sum + section[index], 0) / interior.length);
       ratios = ratios.map(() => averages);
     }
     const change = Math.max(...ratios.flat().map(ratio => Math.abs(ratio - 1)));
     maximumSpacingChange = Math.max(maximumSpacingChange, change);
-    if (change <= .08) { output.push(...family); continue; }
+    if (change <= activation) { output.push(...family); continue; }
     adjusted = true;
+    if (bending) {
+      const curves = family.map(stroke => ({ ...stroke, points: [], generated: true }));
+      const averageRatios = ratios[0].map((value, index) => ratios.reduce((sum, section) => sum + section[index], 0) / sampleCount);
+      ratios.forEach((values, step) => {
+        const source = family.map(stroke => sampleStroke(stroke, step / (sampleCount - 1)));
+        const corrected = [source[0]];
+        values.forEach((value, index) => {
+          const nearby = ratios.slice(Math.max(0, step - 2), Math.min(sampleCount, step + 3));
+          const localRatio = nearby.reduce((sum, section) => sum + section[index], 0) / nearby.length;
+          const ratio = .2 * localRatio + .8 * averageRatios[index];
+          const correction = Math.sign(ratio - 1) * Math.max(0, Math.abs(ratio - 1) - deadband);
+          corrected.push(source[index + 1].map((coordinate, axis) => corrected[index][axis] + (coordinate - source[index][axis]) / (1 + correction)));
+        });
+        const offset = [0, 1].map(axis => source.reduce((sum, point, index) => sum + point[axis] - corrected[index][axis], 0) / family.length);
+        corrected.forEach((point, index) => {
+          curves[index].points.push(point.map((coordinate, axis) => Math.max(axis === 0 ? 0 : -.98, Math.min(axis === 0 ? 1 : .98, coordinate + offset[axis]))));
+        });
+      });
+      output.push(...curves);
+      continue;
+    }
     const sections = ratios.map((values, step) => {
       const phases = [0];
       values.forEach((value, index) => {
         const nearby = ratios.slice(Math.max(0, step - 2), Math.min(sampleCount, step + 3));
         const ratio = nearby.reduce((sum, section) => sum + section[index], 0) / nearby.length;
-        const correction = Math.sign(ratio - 1) * Math.max(0, Math.abs(ratio - 1) - .05);
+        const correction = Math.sign(ratio - 1) * Math.max(0, Math.abs(ratio - 1) - deadband);
         phases.push(phases[phases.length - 1] + 1 + correction);
       });
       const offset = (family.length - 1 - phases[phases.length - 1]) / 2;
@@ -237,7 +267,7 @@ export function adapt(strokes, geometry, reference) {
       finish(sampleCount - 1);
     }
   }
-  return { strokes: output, added: Math.max(0, output.length - strokes.length), removed: Math.max(0, strokes.length - output.length), adjusted, maximumSpacingChange, method: 'local-spacing-phase/1' };
+  return { strokes: output, added: Math.max(0, output.length - strokes.length), removed: Math.max(0, strokes.length - output.length), adjusted, maximumSpacingChange, method: localBending ? 'local-spacing-phase/2' : 'local-spacing-phase/1' };
 }
 export function pathData(points, closed = false) {
   return points.map((point, index) => `${index ? 'L' : 'M'}${point[0].toFixed(2)},${point[1].toFixed(2)}`).join(' ') + (closed ? ' Z' : '');

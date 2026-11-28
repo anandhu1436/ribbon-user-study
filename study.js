@@ -1,4 +1,4 @@
-import { patterns, deformations, makePattern, randomGenerator, adapt, adaptLegacy, model } from './geometry.js';
+import { patterns, deformations, makePattern, randomGenerator, adapt, adaptPhaseV1, adaptLegacy, model } from './geometry.js';
 
 export function createTrials(seed) {
   const random = randomGenerator(seed);
@@ -12,7 +12,7 @@ export function createTrials(seed) {
   };
   const assignments = shuffled(Array.from({ length: 16 }, (_, index) => index < 8));
   const comparisons = shuffled(patterns.flatMap((pattern, patternIndex) => deformations.map(condition => ({
-    id: `preference-${pattern.id}-${condition.id}`, stage: 'preference', pattern: pattern.id, condition: condition.id, seed: 2087 + patternIndex * 101, adaptationVersion: 'local-spacing-phase/1'
+    id: `preference-${pattern.id}-${condition.id}`, stage: 'preference', pattern: pattern.id, condition: condition.id, seed: 2087 + patternIndex * 101, adaptationVersion: 'local-spacing-phase/2'
   })))).map((trial, index) => ({ ...trial, mapping: assignments[index] ? { A: 'direct', B: 'adapted' } : { A: 'adapted', B: 'direct' } }));
   const conditions = shuffled(deformations);
   const drawings = shuffled(patterns.map((pattern, index) => ({
@@ -35,7 +35,7 @@ export function preferenceResult(trial, choice) {
 
 export function trialCandidates(trial) {
   const source = trialSource(trial);
-  const algorithm = trial.adaptationVersion === 'local-spacing-phase/1' ? adapt : adaptLegacy;
+  const algorithm = trial.adaptationVersion === 'local-spacing-phase/2' ? adapt : trial.adaptationVersion === 'local-spacing-phase/1' ? adaptPhaseV1 : adaptLegacy;
   const result = algorithm(source, model(trial.condition, .85), model());
   return { direct: source, adapted: result.strokes };
 }
